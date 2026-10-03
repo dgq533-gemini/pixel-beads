@@ -5,7 +5,7 @@ import { LANGUAGES, getTranslation, detectLanguage, getHtmlLang } from '../i18n/
 const BEAD_SIZE = 14
 const MAX_RENDER_SCALE = 3 // canvas 最大渲染倍率（防止内存爆炸）
 const BASE_SCALE = 2 // 基础渲染分辨率倍率，缩放时不重绘，仅改 CSS 尺寸
-const MAX_CANVAS_AREA = 8000000 // 移动端安全上限：800万像素（iOS Safari 限制约 16MP，留余量）
+const MAX_CANVAS_AREA = 32000000 // 画布面积上限（3200万像素），兼顾清晰度与移动端兼容性
 
 // 根据长边格数 + 图片比例计算 cols × rows
 const calcGrid = (img, longSide) => {
@@ -137,6 +137,7 @@ export default function PixelBeadsPage() {
   const leftClickTimerRef = useRef(null)
   const longPressTimerRef = useRef(null)
   const fitTimerRef = useRef(null)
+  const zoomRerenderTimerRef = useRef(null)
   // 缩放/偏移的实时镜像，供滚轮缩放读取最新值（避免在 setState updater 内嵌套调用 setState）
   const zoomRef = useRef(zoom)
   const offsetXRef = useRef(offsetX)
@@ -189,10 +190,10 @@ export default function PixelBeadsPage() {
     const { cols, rows } = grid
     const beadGrid = beadResult.grid
 
-    // 固定 BASE_SCALE 分辨率渲染，缩放时不重绘
-    // 但若总面积超过移动端安全上限，自动降低倍率，避免 iOS Safari 等浏览器画布变空白
+    // 渲染倍率：至少 BASE_SCALE，且随 zoom 提升以保证高倍缩放下文字清晰
+    // 总面积超过上限时自动降低倍率，避免移动端画布空白
     const baseArea = cols * rows * BEAD_SIZE * BEAD_SIZE
-    let scale = BASE_SCALE
+    let scale = Math.max(BASE_SCALE, zoomRef.current)
     if (baseArea * scale * scale > MAX_CANVAS_AREA) {
       scale = Math.sqrt(MAX_CANVAS_AREA / baseArea)
     }
@@ -237,7 +238,7 @@ export default function PixelBeadsPage() {
 
         const luminance = (cell.rgb.r * 299 + cell.rgb.g * 587 + cell.rgb.b * 114) / 1000
         ctx.fillStyle = luminance > 140 ? '#000000' : '#ffffff'
-        ctx.font = `${Math.max(5, Math.round(BEAD_SIZE * 0.38))}px sans-serif`
+        ctx.font = `${Math.max(6, Math.round(BEAD_SIZE * 0.45))}px sans-serif`
         ctx.textAlign = 'center'
         ctx.textBaseline = 'middle'
         ctx.fillText(cell.name, px + BEAD_SIZE / 2, py + BEAD_SIZE / 2)
@@ -263,13 +264,17 @@ export default function PixelBeadsPage() {
     setBeadCounts(list)
   }, [beadResult, grid])
 
-  // 缩放时仅更新 canvas CSS 显示尺寸（不重绘，极速）
+  // 缩放时先更新 CSS 尺寸保证流畅，缩放停止后重绘画布提升清晰度
   useEffect(() => {
     const canvas = previewCanvasRef.current
     if (!canvas) return
     const { cols, rows } = grid
     canvas.style.width = `${cols * BEAD_SIZE * zoom}px`
     canvas.style.height = `${rows * BEAD_SIZE * zoom}px`
+    if (zoomRerenderTimerRef.current) clearTimeout(zoomRerenderTimerRef.current)
+    zoomRerenderTimerRef.current = setTimeout(() => {
+      renderCanvasRef.current?.()
+    }, 120)
   }, [zoom, grid])
 
   // 自动适配容器：居中显示全部，尽量填满去白边
@@ -633,6 +638,7 @@ export default function PixelBeadsPage() {
   useEffect(() => () => {
     if (leftClickTimerRef.current) clearTimeout(leftClickTimerRef.current)
     if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current)
+    if (zoomRerenderTimerRef.current) clearTimeout(zoomRerenderTimerRef.current)
   }, [])
 
   const totalBeads = useMemo(() => beadCounts.reduce((s, b) => s + b.count, 0), [beadCounts])
