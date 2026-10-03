@@ -622,15 +622,16 @@ export default function PixelBeadsPage() {
     ectx.fillStyle = '#e53935'; ectx.font = 'bold 15px sans-serif'
     ectx.fillText(t.totalBeads(total), listX, ly + 12)
 
-    ec.toBlob((blob) => {
-      if (!blob) return
-      const url = URL.createObjectURL(blob)
+    // 使用 toDataURL 同步生成图片，确保在用户手势内触发下载（移动端不被拦截）
+    try {
+      const dataUrl = ec.toDataURL('image/png', 1.0)
       const a = document.createElement('a')
-      a.href = url
+      a.href = dataUrl
       a.download = `pixel-beads-${cols}x${rows}-${Date.now()}.png`
       document.body.appendChild(a); a.click(); document.body.removeChild(a)
-      setTimeout(() => URL.revokeObjectURL(url), 1000)
-    }, 'image/png', 1.0)
+    } catch (err) {
+      console.error('Export failed:', err)
+    }
   }
 
   // ===== 支付 & 下载逻辑 =====
@@ -651,45 +652,28 @@ export default function PixelBeadsPage() {
   }
 
   // 模拟支付流程 —— 接入真实支付时替换此函数体
-  // 可对接：Stripe / 微信支付 / 支付宝 / PayPal 等
+  // 注意：下载必须在用户点击手势内触发，否则移动端浏览器会拦截
   const processPayment = () => {
     setPayStatus('processing')
-    // === 真实支付接入示例 ===
-    // fetch('/api/payment/create', { method: 'POST', body: JSON.stringify({ amount: 9.9 }) })
-    //   .then(r => r.json())
-    //   .then(({ checkoutUrl }) => { window.location.href = checkoutUrl })
-    // 支付网关回调到 /api/payment/verify 后再触发下载
-    // ========================
+    // 立即触发下载（在用户手势上下文内），同时展示支付成功动画
+    handleExport()
     setTimeout(() => {
       setPayStatus('success')
       setTimeout(() => {
-        handleExport()
         closePaymentModal()
       }, 800)
-    }, 1500)
+    }, 600)
   }
 
-  // 标记是否已由指针逻辑处理（防止 onClick 重复触发）
-  // 导出按钮指针按下：统一处理鼠标（左键/右键）和触摸（短按支付/长按免费）
-  const handleExportPointerDown = (e) => {
-    pointerHandledRef.current = false
-    if (e.pointerType === 'touch') {
-      // 移动端：长按 500ms → 免费下载；短按 → 打开支付弹窗
-      longPressTimerRef.current = setTimeout(() => {
-        longPressTimerRef.current = null
-        pointerHandledRef.current = true
-        doFreeDownload()
-      }, 500)
-      return
-    }
-    // 桌面端鼠标逻辑
+  // 触摸起始位置，用于判断是否移动（移动则取消长按）
+  const touchStartRef = useRef({ x: 0, y: 0 })
+
+  // 桌面端：左键单击 → 支付；左键按下 250ms 内同时按右键 → 免费下载
+  const handleExportMouseDown = (e) => {
     if (e.button === 0) {
       if (leftClickTimerRef.current) clearTimeout(leftClickTimerRef.current)
       leftClickTimerRef.current = setTimeout(() => {
-        if (!rightPressedRef.current) {
-          pointerHandledRef.current = true
-          openPaymentModal()
-        }
+        if (!rightPressedRef.current) openPaymentModal()
         rightPressedRef.current = false
       }, 250)
     } else if (e.button === 2) {
@@ -704,36 +688,43 @@ export default function PixelBeadsPage() {
     }
   }
 
-  const handleExportPointerUp = (e) => {
-    if (e.pointerType === 'touch') {
-      // 移动端：若长按未触发（短按），则打开支付弹窗
-      if (longPressTimerRef.current) {
-        clearTimeout(longPressTimerRef.current)
-        longPressTimerRef.current = null
-        pointerHandledRef.current = true
-        openPaymentModal()
-      }
-      return
-    }
+  const handleExportMouseUp = (e) => {
     if (e.button === 2) {
       setTimeout(() => { rightPressedRef.current = false }, 150)
     }
   }
 
-  // pointercancel 在移动端可能立即触发（浏览器接管手势），
-  // 此时若长按未触发则视为短按 → 打开支付弹窗，保证按钮始终有响应
-  const handleExportPointerCancel = (e) => {
-    if (e.pointerType === 'touch') {
-      if (longPressTimerRef.current) {
-        clearTimeout(longPressTimerRef.current)
-        longPressTimerRef.current = null
-        pointerHandledRef.current = true
-        openPaymentModal()
-      }
+  // 移动端：长按 500ms → 免费下载；短按 → onClick 打开支付弹窗
+  const handleExportTouchStart = (e) => {
+    pointerHandledRef.current = false
+    const t = e.touches[0]
+    touchStartRef.current = { x: t.clientX, y: t.clientY }
+    longPressTimerRef.current = setTimeout(() => {
+      longPressTimerRef.current = null
+      pointerHandledRef.current = true
+      doFreeDownload()
+    }, 500)
+  }
+
+  const handleExportTouchMove = (e) => {
+    if (!longPressTimerRef.current) return
+    const t = e.touches[0]
+    const dx = t.clientX - touchStartRef.current.x
+    const dy = t.clientY - touchStartRef.current.y
+    if (Math.hypot(dx, dy) > 10) {
+      clearTimeout(longPressTimerRef.current)
+      longPressTimerRef.current = null
     }
   }
 
-  // onClick 兜底：若指针逻辑未处理（部分浏览器 pointer 事件不完整），直接打开支付弹窗
+  const handleExportTouchEnd = () => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current)
+      longPressTimerRef.current = null
+    }
+  }
+
+  // onClick：短按/左键打开支付弹窗（若已由长按/右键处理则跳过）
   const handleExportClick = () => {
     if (pointerHandledRef.current) {
       pointerHandledRef.current = false
@@ -1030,12 +1021,14 @@ export default function PixelBeadsPage() {
 
               {/* 导出按钮 */}
               <button
-                onPointerDown={handleExportPointerDown}
-                onPointerUp={handleExportPointerUp}
-                onPointerCancel={handleExportPointerCancel}
+                onMouseDown={handleExportMouseDown}
+                onMouseUp={handleExportMouseUp}
+                onTouchStart={handleExportTouchStart}
+                onTouchMove={handleExportTouchMove}
+                onTouchEnd={handleExportTouchEnd}
                 onClick={handleExportClick}
                 onContextMenu={handleExportContextMenu}
-                className="w-full inline-flex items-center justify-center gap-2 rounded-2xl py-4 text-base font-bold bg-green-500 text-white hover:bg-green-600 active:scale-[0.98] transition-all shadow-lg shadow-green-500/20 select-none touch-none"
+                className="w-full inline-flex items-center justify-center gap-2 rounded-2xl py-4 text-base font-bold bg-green-500 text-white hover:bg-green-600 active:scale-[0.98] transition-all shadow-lg shadow-green-500/20 select-none"
               >
                 {t.exportBtn}
               </button>
