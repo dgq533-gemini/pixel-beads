@@ -5,6 +5,7 @@ import { LANGUAGES, getTranslation, detectLanguage, getHtmlLang } from '../i18n/
 const BEAD_SIZE = 14
 const MAX_RENDER_SCALE = 3 // canvas 最大渲染倍率（防止内存爆炸）
 const BASE_SCALE = 2 // 基础渲染分辨率倍率，缩放时不重绘，仅改 CSS 尺寸
+const MAX_CANVAS_AREA = 8000000 // 移动端安全上限：800万像素（iOS Safari 限制约 16MP，留余量）
 
 // 根据长边格数 + 图片比例计算 cols × rows
 const calcGrid = (img, longSide) => {
@@ -134,6 +135,7 @@ export default function PixelBeadsPage() {
   // 左右键同时按检测
   const rightPressedRef = useRef(false)
   const leftClickTimerRef = useRef(null)
+  const longPressTimerRef = useRef(null)
   const fitTimerRef = useRef(null)
   // 缩放/偏移的实时镜像，供滚轮缩放读取最新值（避免在 setState updater 内嵌套调用 setState）
   const zoomRef = useRef(zoom)
@@ -188,11 +190,17 @@ export default function PixelBeadsPage() {
     const beadGrid = beadResult.grid
 
     // 固定 BASE_SCALE 分辨率渲染，缩放时不重绘
-    canvas.width = Math.round(cols * BEAD_SIZE * BASE_SCALE)
-    canvas.height = Math.round(rows * BEAD_SIZE * BASE_SCALE)
+    // 但若总面积超过移动端安全上限，自动降低倍率，避免 iOS Safari 等浏览器画布变空白
+    const baseArea = cols * rows * BEAD_SIZE * BEAD_SIZE
+    let scale = BASE_SCALE
+    if (baseArea * scale * scale > MAX_CANVAS_AREA) {
+      scale = Math.sqrt(MAX_CANVAS_AREA / baseArea)
+    }
+    canvas.width = Math.round(cols * BEAD_SIZE * scale)
+    canvas.height = Math.round(rows * BEAD_SIZE * scale)
 
     const ctx = canvas.getContext('2d')
-    ctx.setTransform(BASE_SCALE, 0, 0, BASE_SCALE, 0, 0)
+    ctx.setTransform(scale, 0, 0, scale, 0, 0)
     ctx.imageSmoothingEnabled = true
 
     ctx.fillStyle = '#f5f5f5'
@@ -572,14 +580,23 @@ export default function PixelBeadsPage() {
     }, 1500)
   }
 
-  // 导出按钮鼠标按下：检测左右键同时按
-  const handleExportMouseDown = (e) => {
+  // 导出按钮指针按下：统一处理鼠标（左键/右键）和触摸（短按支付/长按免费）
+  const handleExportPointerDown = (e) => {
+    if (e.pointerType === 'touch') {
+      // 移动端：长按 500ms → 免费下载；短按 → 打开支付弹窗
+      longPressTimerRef.current = setTimeout(() => {
+        longPressTimerRef.current = null
+        doFreeDownload()
+      }, 500)
+      return
+    }
+    // 桌面端鼠标逻辑
     if (e.button === 0) {
       // 左键按下：延迟判定，等待右键是否同时按下
       if (leftClickTimerRef.current) clearTimeout(leftClickTimerRef.current)
       leftClickTimerRef.current = setTimeout(() => {
         if (!rightPressedRef.current) openPaymentModal()
-        rightPressedRef.current = false // 重置右键状态
+        rightPressedRef.current = false
       }, 250)
     } else if (e.button === 2) {
       // 右键按下：若左键已按下则触发免费下载
@@ -587,13 +604,22 @@ export default function PixelBeadsPage() {
       if (leftClickTimerRef.current) {
         clearTimeout(leftClickTimerRef.current)
         leftClickTimerRef.current = null
-        rightPressedRef.current = false // 重置，避免影响后续操作
+        rightPressedRef.current = false
         doFreeDownload()
       }
     }
   }
 
-  const handleExportMouseUp = (e) => {
+  const handleExportPointerUp = (e) => {
+    if (e.pointerType === 'touch') {
+      // 移动端：若长按未触发（短按），则打开支付弹窗
+      if (longPressTimerRef.current) {
+        clearTimeout(longPressTimerRef.current)
+        longPressTimerRef.current = null
+        openPaymentModal()
+      }
+      return
+    }
     if (e.button === 2) {
       setTimeout(() => { rightPressedRef.current = false }, 150)
     }
@@ -606,6 +632,7 @@ export default function PixelBeadsPage() {
   // 组件卸载时清理定时器
   useEffect(() => () => {
     if (leftClickTimerRef.current) clearTimeout(leftClickTimerRef.current)
+    if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current)
   }, [])
 
   const totalBeads = useMemo(() => beadCounts.reduce((s, b) => s + b.count, 0), [beadCounts])
@@ -886,10 +913,13 @@ export default function PixelBeadsPage() {
 
               {/* 导出按钮 */}
               <button
-                onMouseDown={handleExportMouseDown}
-                onMouseUp={handleExportMouseUp}
+                onPointerDown={handleExportPointerDown}
+                onPointerUp={handleExportPointerUp}
+                onPointerCancel={() => {
+                  if (longPressTimerRef.current) { clearTimeout(longPressTimerRef.current); longPressTimerRef.current = null }
+                }}
                 onContextMenu={handleExportContextMenu}
-                className="w-full inline-flex items-center justify-center gap-2 rounded-2xl py-4 text-base font-bold bg-green-500 text-white hover:bg-green-600 active:scale-[0.98] transition-all shadow-lg shadow-green-500/20 select-none"
+                className="w-full inline-flex items-center justify-center gap-2 rounded-2xl py-4 text-base font-bold bg-green-500 text-white hover:bg-green-600 active:scale-[0.98] transition-all shadow-lg shadow-green-500/20 select-none touch-none"
               >
                 {t.exportBtn}
               </button>
