@@ -137,7 +137,6 @@ export default function PixelBeadsPage() {
   const leftClickTimerRef = useRef(null)
   const longPressTimerRef = useRef(null)
   const fitTimerRef = useRef(null)
-  const zoomRerenderTimerRef = useRef(null)
   const pointerHandledRef = useRef(false)
   // 缩放/偏移的实时镜像，供滚轮缩放读取最新值（避免在 setState updater 内嵌套调用 setState）
   const zoomRef = useRef(zoom)
@@ -191,10 +190,10 @@ export default function PixelBeadsPage() {
     const { cols, rows } = grid
     const beadGrid = beadResult.grid
 
-    // 渲染倍率：至少 BASE_SCALE，且随 zoom 提升以保证高倍缩放下文字清晰
-    // 总面积超过上限时自动降低倍率，避免移动端画布空白
+    // 渲染倍率：固定 BASE_SCALE，总面积超上限时自动降低（保证移动端画布可渲染）
+    // 缩放仅改 CSS 尺寸，不重绘，保证流畅
     const baseArea = cols * rows * BEAD_SIZE * BEAD_SIZE
-    let scale = Math.max(BASE_SCALE, zoomRef.current)
+    let scale = BASE_SCALE
     if (baseArea * scale * scale > MAX_CANVAS_AREA) {
       scale = Math.sqrt(MAX_CANVAS_AREA / baseArea)
     }
@@ -261,28 +260,15 @@ export default function PixelBeadsPage() {
     for (let i = 0; i <= rows; i++) {
       ctx.beginPath(); ctx.moveTo(0, i * BEAD_SIZE); ctx.lineTo(cols * BEAD_SIZE, i * BEAD_SIZE); ctx.stroke()
     }
-
-    // 珠子计数
-    const list = []
-    beadResult.counts.forEach((count, hex) => {
-      const p = getPalette().find((c) => c.hex === hex)
-      if (p) list.push({ color: p, count })
-    })
-    list.sort((a, b) => b.count - a.count)
-    setBeadCounts(list)
   }, [beadResult, grid])
 
-  // 缩放时先更新 CSS 尺寸保证流畅，缩放停止后重绘画布提升清晰度
+  // 缩放时仅更新 canvas CSS 显示尺寸（不重绘，保证拖拽/缩放极速流畅）
   useEffect(() => {
     const canvas = previewCanvasRef.current
     if (!canvas) return
     const { cols, rows } = grid
     canvas.style.width = `${cols * BEAD_SIZE * zoom}px`
     canvas.style.height = `${rows * BEAD_SIZE * zoom}px`
-    if (zoomRerenderTimerRef.current) clearTimeout(zoomRerenderTimerRef.current)
-    zoomRerenderTimerRef.current = setTimeout(() => {
-      renderCanvasRef.current?.()
-    }, 120)
   }, [zoom, grid])
 
   // 自动适配容器：居中显示全部，尽量填满去白边
@@ -306,10 +292,18 @@ export default function PixelBeadsPage() {
   const renderCanvasRef = useRef(null)
   useEffect(() => { renderCanvasRef.current = renderCanvas }, [renderCanvas])
 
-  // 图纸更新（beadResult 变化）→ 渲染 + 自动适配
+  // 图纸更新（beadResult 变化）→ 渲染 + 珠子计数 + 自动适配
   useEffect(() => {
     if (beadResult.grid.length > 0) {
       renderCanvasRef.current?.()
+      // 珠子计数（移出 renderCanvas，避免重绘时触发 setState 导致卡顿）
+      const list = []
+      beadResult.counts.forEach((count, hex) => {
+        const p = getPalette().find((c) => c.hex === hex)
+        if (p) list.push({ color: p, count })
+      })
+      list.sort((a, b) => b.count - a.count)
+      setBeadCounts(list)
       if (fitTimerRef.current) clearTimeout(fitTimerRef.current)
       fitTimerRef.current = setTimeout(() => fitToScreen(), 50)
     }
@@ -513,10 +507,10 @@ export default function PixelBeadsPage() {
     const { cols, rows } = grid
     const beadGrid = beadResult.grid
 
-    // 导出专用珠径与字号（比预览更大，保证放大后色号清晰）
-    const EX_BEAD = 20
-    const EX_FONT = Math.round(EX_BEAD * 0.55) // 约 11px
-    const MAX_EXPORTAREA = 20000000 // 导出画布面积上限 20MP，控制 PNG 文件大小
+    // 导出专用珠径与字号（大珠径+大字号，保证放大后色号清晰）
+    const EX_BEAD = 32
+    const EX_FONT = Math.round(EX_BEAD * 0.5) // 16px
+    const MAX_EXPORTAREA = 36000000 // 导出画布面积上限 36MP，平衡清晰度与文件大小
 
     // 按面积上限自动缩放（大格子图自动降倍率，避免文件过大）
     const baseArea = cols * rows * EX_BEAD * EX_BEAD
@@ -592,7 +586,7 @@ export default function PixelBeadsPage() {
 
         const luminance = (cell.rgb.r * 299 + cell.rgb.g * 587 + cell.rgb.b * 114) / 1000
         ectx.fillStyle = luminance > 140 ? '#000000' : '#ffffff'
-        ectx.font = `${EX_FONT}px sans-serif`
+        ectx.font = `bold ${EX_FONT}px sans-serif`
         ectx.textAlign = 'center'
         ectx.textBaseline = 'middle'
         ectx.fillText(cell.name, px + EX_BEAD / 2, py + EX_BEAD / 2)
@@ -756,7 +750,6 @@ export default function PixelBeadsPage() {
   useEffect(() => () => {
     if (leftClickTimerRef.current) clearTimeout(leftClickTimerRef.current)
     if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current)
-    if (zoomRerenderTimerRef.current) clearTimeout(zoomRerenderTimerRef.current)
   }, [])
 
   const totalBeads = useMemo(() => beadCounts.reduce((s, b) => s + b.count, 0), [beadCounts])
