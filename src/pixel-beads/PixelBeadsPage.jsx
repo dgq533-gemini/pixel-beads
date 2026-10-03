@@ -507,44 +507,126 @@ export default function PixelBeadsPage() {
     if (file) loadImage(file)
   }
 
-  // 导出高清合并 PNG
+  // 导出高清 PNG：直接在导出画布上以独立高分辨率绘制拼豆，色号文字清晰且文件可控
   const handleExport = () => {
-    const beadCanvas = previewCanvasRef.current
-    if (!beadCanvas) return
-    // 导出时用 1:1 原始尺寸渲染（不缩放）
+    if (!beadResult.grid.length) return
     const { cols, rows } = grid
-    const padding = 40, titleH = 60, listW = 300
-    const totalW = beadCanvas.width + listW + padding * 3
-    const totalH = Math.max(beadCanvas.height + titleH + padding * 2, 420)
+    const beadGrid = beadResult.grid
+
+    // 导出专用珠径与字号（比预览更大，保证放大后色号清晰）
+    const EX_BEAD = 20
+    const EX_FONT = Math.round(EX_BEAD * 0.55) // 约 11px
+    const MAX_EXPORTAREA = 20000000 // 导出画布面积上限 20MP，控制 PNG 文件大小
+
+    // 按面积上限自动缩放（大格子图自动降倍率，避免文件过大）
+    const baseArea = cols * rows * EX_BEAD * EX_BEAD
+    let scale = 1
+    if (baseArea > MAX_EXPORTAREA) {
+      scale = Math.sqrt(MAX_EXPORTAREA / baseArea)
+    }
+
+    const beadW = cols * EX_BEAD * scale
+    const beadH = rows * EX_BEAD * scale
+    const padding = 40 * scale
+    const titleH = 60 * scale
+    const listW = 280 * scale
+    const totalW = beadW + listW + padding * 3
+    const totalH = Math.max(beadH + titleH + padding * 2, 420 * scale)
 
     const ec = document.createElement('canvas')
-    ec.width = totalW; ec.height = totalH
+    ec.width = Math.round(totalW)
+    ec.height = Math.round(totalH)
     const ectx = ec.getContext('2d')
-    ectx.fillStyle = '#ffffff'; ectx.fillRect(0, 0, totalW, totalH)
+    ectx.setTransform(scale, 0, 0, scale, 0, 0)
+    ectx.imageSmoothingEnabled = true
 
-    ectx.fillStyle = '#1a1a1a'; ectx.font = 'bold 28px sans-serif'; ectx.textAlign = 'left'
-    ectx.fillText(t.exportSheetTitle, padding, 42)
-    ectx.font = '14px sans-serif'; ectx.fillStyle = '#666'
-    ectx.fillText(t.exportSheetMeta(cols, rows, beadCounts.length), padding, 64)
-    ectx.drawImage(beadCanvas, padding, titleH + padding)
+    // 背景
+    ectx.fillStyle = '#ffffff'
+    ectx.fillRect(0, 0, totalW / scale, totalH / scale)
 
-    let ly = titleH + padding + 10
-    ectx.fillStyle = '#1a1a1a'; ectx.font = 'bold 18px sans-serif'
-    ectx.fillText(t.exportCountTitle, beadCanvas.width + padding * 2, ly)
+    // 标题
+    ectx.fillStyle = '#1a1a1a'
+    ectx.font = 'bold 28px sans-serif'
+    ectx.textAlign = 'left'
+    ectx.textBaseline = 'alphabetic'
+    ectx.fillText(t.exportSheetTitle, padding / scale, 42)
+    ectx.font = '14px sans-serif'
+    ectx.fillStyle = '#666'
+    ectx.fillText(t.exportSheetMeta(cols, rows, beadCounts.length), padding / scale, 64)
+
+    // 拼豆图案区域
+    const ox = padding / scale
+    const oy = (titleH + padding) / scale
+    ectx.fillStyle = '#f5f5f5'
+    ectx.fillRect(ox, oy, cols * EX_BEAD, rows * EX_BEAD)
+
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
+        const cell = beadGrid[y][x]
+        if (!cell) continue
+        const px = ox + x * EX_BEAD
+        const py = oy + y * EX_BEAD
+        const r = EX_BEAD / 2 - 1
+
+        ectx.fillStyle = cell.hex
+        ectx.beginPath()
+        ectx.arc(px + EX_BEAD / 2, py + EX_BEAD / 2, r, 0, Math.PI * 2)
+        ectx.fill()
+
+        const grad = ectx.createRadialGradient(
+          px + EX_BEAD / 2 - 2, py + EX_BEAD / 2 - 2, 1,
+          px + EX_BEAD / 2, py + EX_BEAD / 2, r
+        )
+        grad.addColorStop(0, 'rgba(255,255,255,0.4)')
+        grad.addColorStop(0.5, 'rgba(255,255,255,0)')
+        grad.addColorStop(1, 'rgba(0,0,0,0.12)')
+        ectx.fillStyle = grad
+        ectx.beginPath()
+        ectx.arc(px + EX_BEAD / 2, py + EX_BEAD / 2, r, 0, Math.PI * 2)
+        ectx.fill()
+
+        ectx.fillStyle = 'rgba(0,0,0,0.18)'
+        ectx.beginPath()
+        ectx.arc(px + EX_BEAD / 2, py + EX_BEAD / 2, 1.8, 0, Math.PI * 2)
+        ectx.fill()
+
+        const luminance = (cell.rgb.r * 299 + cell.rgb.g * 587 + cell.rgb.b * 114) / 1000
+        ectx.fillStyle = luminance > 140 ? '#000000' : '#ffffff'
+        ectx.font = `${EX_FONT}px sans-serif`
+        ectx.textAlign = 'center'
+        ectx.textBaseline = 'middle'
+        ectx.fillText(cell.name, px + EX_BEAD / 2, py + EX_BEAD / 2)
+      }
+    }
+
+    // 网格线
+    ectx.strokeStyle = 'rgba(0,0,0,0.08)'
+    ectx.lineWidth = 0.5
+    for (let i = 0; i <= cols; i++) {
+      ectx.beginPath(); ectx.moveTo(ox + i * EX_BEAD, oy); ectx.lineTo(ox + i * EX_BEAD, oy + rows * EX_BEAD); ectx.stroke()
+    }
+    for (let i = 0; i <= rows; i++) {
+      ectx.beginPath(); ectx.moveTo(ox, oy + i * EX_BEAD); ectx.lineTo(ox + cols * EX_BEAD, oy + i * EX_BEAD); ectx.stroke()
+    }
+
+    // 颜色清单
+    const listX = ox + cols * EX_BEAD + padding / scale
+    let ly = oy + 10
+    ectx.fillStyle = '#1a1a1a'; ectx.font = 'bold 18px sans-serif'; ectx.textAlign = 'left'
+    ectx.fillText(t.exportCountTitle, listX, ly)
     ly += 32
     beadCounts.forEach(({ color, count }) => {
-      const cx = beadCanvas.width + padding * 2
       ectx.fillStyle = color.hex
-      ectx.beginPath(); ectx.arc(cx + 12, ly - 6, 10, 0, Math.PI * 2); ectx.fill()
+      ectx.beginPath(); ectx.arc(listX + 12, ly - 6, 10, 0, Math.PI * 2); ectx.fill()
       ectx.strokeStyle = '#ccc'; ectx.lineWidth = 1; ectx.stroke()
       ectx.fillStyle = '#333'; ectx.font = '14px sans-serif'
-      ectx.fillText(t.exportCountItem(color.name, count), cx + 30, ly - 1)
+      ectx.fillText(t.exportCountItem(color.name, count), listX + 30, ly - 1)
       ly += 28
-      if (ly > totalH - 50) return
+      if (ly > totalH / scale - 50) return
     })
     const total = beadCounts.reduce((s, b) => s + b.count, 0)
     ectx.fillStyle = '#e53935'; ectx.font = 'bold 15px sans-serif'
-    ectx.fillText(t.totalBeads(total), beadCanvas.width + padding * 2, ly + 12)
+    ectx.fillText(t.totalBeads(total), listX, ly + 12)
 
     ec.toBlob((blob) => {
       if (!blob) return
