@@ -5,7 +5,7 @@ import { LANGUAGES, getTranslation, detectLanguage, getHtmlLang } from '../i18n/
 const BEAD_SIZE = 14
 const MAX_RENDER_SCALE = 3 // canvas 最大渲染倍率（防止内存爆炸）
 const BASE_SCALE = 2 // 基础渲染分辨率倍率，缩放时不重绘，仅改 CSS 尺寸
-const MAX_CANVAS_AREA = 32000000 // 画布面积上限（3200万像素），兼顾清晰度与移动端兼容性
+const MAX_CANVAS_AREA = 12000000 // 画布面积上限（1200万像素），兼容所有移动端浏览器
 
 // 根据长边格数 + 图片比例计算 cols × rows
 const calcGrid = (img, longSide) => {
@@ -138,6 +138,7 @@ export default function PixelBeadsPage() {
   const longPressTimerRef = useRef(null)
   const fitTimerRef = useRef(null)
   const zoomRerenderTimerRef = useRef(null)
+  const pointerHandledRef = useRef(false)
   // 缩放/偏移的实时镜像，供滚轮缩放读取最新值（避免在 setState updater 内嵌套调用 setState）
   const zoomRef = useRef(zoom)
   const offsetXRef = useRef(offsetX)
@@ -197,8 +198,15 @@ export default function PixelBeadsPage() {
     if (baseArea * scale * scale > MAX_CANVAS_AREA) {
       scale = Math.sqrt(MAX_CANVAS_AREA / baseArea)
     }
-    canvas.width = Math.round(cols * BEAD_SIZE * scale)
-    canvas.height = Math.round(rows * BEAD_SIZE * scale)
+    try {
+      canvas.width = Math.round(cols * BEAD_SIZE * scale)
+      canvas.height = Math.round(rows * BEAD_SIZE * scale)
+    } catch (err) {
+      // 画布尺寸过大时回退到 1x
+      canvas.width = cols * BEAD_SIZE
+      canvas.height = rows * BEAD_SIZE
+      scale = 1
+    }
 
     const ctx = canvas.getContext('2d')
     ctx.setTransform(scale, 0, 0, scale, 0, 0)
@@ -585,31 +593,36 @@ export default function PixelBeadsPage() {
     }, 1500)
   }
 
+  // 标记是否已由指针逻辑处理（防止 onClick 重复触发）
   // 导出按钮指针按下：统一处理鼠标（左键/右键）和触摸（短按支付/长按免费）
   const handleExportPointerDown = (e) => {
+    pointerHandledRef.current = false
     if (e.pointerType === 'touch') {
       // 移动端：长按 500ms → 免费下载；短按 → 打开支付弹窗
       longPressTimerRef.current = setTimeout(() => {
         longPressTimerRef.current = null
+        pointerHandledRef.current = true
         doFreeDownload()
       }, 500)
       return
     }
     // 桌面端鼠标逻辑
     if (e.button === 0) {
-      // 左键按下：延迟判定，等待右键是否同时按下
       if (leftClickTimerRef.current) clearTimeout(leftClickTimerRef.current)
       leftClickTimerRef.current = setTimeout(() => {
-        if (!rightPressedRef.current) openPaymentModal()
+        if (!rightPressedRef.current) {
+          pointerHandledRef.current = true
+          openPaymentModal()
+        }
         rightPressedRef.current = false
       }, 250)
     } else if (e.button === 2) {
-      // 右键按下：若左键已按下则触发免费下载
       rightPressedRef.current = true
       if (leftClickTimerRef.current) {
         clearTimeout(leftClickTimerRef.current)
         leftClickTimerRef.current = null
         rightPressedRef.current = false
+        pointerHandledRef.current = true
         doFreeDownload()
       }
     }
@@ -621,6 +634,7 @@ export default function PixelBeadsPage() {
       if (longPressTimerRef.current) {
         clearTimeout(longPressTimerRef.current)
         longPressTimerRef.current = null
+        pointerHandledRef.current = true
         openPaymentModal()
       }
       return
@@ -628,6 +642,28 @@ export default function PixelBeadsPage() {
     if (e.button === 2) {
       setTimeout(() => { rightPressedRef.current = false }, 150)
     }
+  }
+
+  // pointercancel 在移动端可能立即触发（浏览器接管手势），
+  // 此时若长按未触发则视为短按 → 打开支付弹窗，保证按钮始终有响应
+  const handleExportPointerCancel = (e) => {
+    if (e.pointerType === 'touch') {
+      if (longPressTimerRef.current) {
+        clearTimeout(longPressTimerRef.current)
+        longPressTimerRef.current = null
+        pointerHandledRef.current = true
+        openPaymentModal()
+      }
+    }
+  }
+
+  // onClick 兜底：若指针逻辑未处理（部分浏览器 pointer 事件不完整），直接打开支付弹窗
+  const handleExportClick = () => {
+    if (pointerHandledRef.current) {
+      pointerHandledRef.current = false
+      return
+    }
+    openPaymentModal()
   }
 
   const handleExportContextMenu = (e) => {
@@ -921,9 +957,8 @@ export default function PixelBeadsPage() {
               <button
                 onPointerDown={handleExportPointerDown}
                 onPointerUp={handleExportPointerUp}
-                onPointerCancel={() => {
-                  if (longPressTimerRef.current) { clearTimeout(longPressTimerRef.current); longPressTimerRef.current = null }
-                }}
+                onPointerCancel={handleExportPointerCancel}
+                onClick={handleExportClick}
                 onContextMenu={handleExportContextMenu}
                 className="w-full inline-flex items-center justify-center gap-2 rounded-2xl py-4 text-base font-bold bg-green-500 text-white hover:bg-green-600 active:scale-[0.98] transition-all shadow-lg shadow-green-500/20 select-none touch-none"
               >
