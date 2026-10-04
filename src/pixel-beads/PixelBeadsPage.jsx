@@ -507,10 +507,10 @@ export default function PixelBeadsPage() {
     const { cols, rows } = grid
     const beadGrid = beadResult.grid
 
-    // 导出专用珠径与字号（大珠径+大字号，保证放大后色号清晰）
-    const EX_BEAD = 32
-    const EX_FONT = Math.round(EX_BEAD * 0.5) // 16px
-    const MAX_EXPORTAREA = 36000000 // 导出画布面积上限 36MP，平衡清晰度与文件大小
+    // 导出专用珠径与字号
+    const EX_BEAD = 22
+    const EX_FONT = Math.round(EX_BEAD * 0.5) // 11px
+    const MAX_EXPORTAREA = 12000000 // 导出画布面积上限 12MP（移动端安全，避免 0 字节）
 
     // 按面积上限自动缩放（大格子图自动降倍率，避免文件过大）
     const baseArea = cols * rows * EX_BEAD * EX_BEAD
@@ -622,16 +622,22 @@ export default function PixelBeadsPage() {
     ectx.fillStyle = '#e53935'; ectx.font = 'bold 15px sans-serif'
     ectx.fillText(t.totalBeads(total), listX, ly + 12)
 
-    // 使用 toDataURL 同步生成图片，确保在用户手势内触发下载（移动端不被拦截）
-    try {
-      const dataUrl = ec.toDataURL('image/png', 1.0)
+    // 使用 toBlob + 对象URL 下载（无 dataURL 大小限制，适合大图）
+    // handleExport 在用户点击手势内同步调用，下载不会被移动端拦截
+    ec.toBlob((blob) => {
+      if (!blob || blob.size === 0) {
+        console.error('Export blob is empty')
+        return
+      }
+      const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
-      a.href = dataUrl
+      a.href = url
       a.download = `pixel-beads-${cols}x${rows}-${Date.now()}.png`
-      document.body.appendChild(a); a.click(); document.body.removeChild(a)
-    } catch (err) {
-      console.error('Export failed:', err)
-    }
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      setTimeout(() => URL.revokeObjectURL(url), 2000)
+    }, 'image/png')
   }
 
   // ===== 支付 & 下载逻辑 =====
