@@ -116,10 +116,6 @@ export default function PixelBeadsPage() {
   const [offsetY, setOffsetY] = useState(0)
   const [isDragging, setIsDragging] = useState(false)
 
-  // 支付弹窗状态
-  const [payOpen, setPayOpen] = useState(false)
-  const [payStatus, setPayStatus] = useState('idle') // idle | processing | success
-
   // 数值输入框的显示值（允许空字符串，blur 时再校验）
   const [longSideInput, setLongSideInput] = useState('200')
   const [colorCountInput, setColorCountInput] = useState('283')
@@ -132,12 +128,7 @@ export default function PixelBeadsPage() {
   const scrollContainerRef = useRef(null)
   const dragRef = useRef({ startX: 0, startY: 0, ox: 0, oy: 0 })
   const touchRef = useRef({ mode: null, dist: 0, startZoom: 1, startX: 0, startY: 0, ox: 0, oy: 0, cx: 0, cy: 0 })
-  // 左右键同时按检测
-  const rightPressedRef = useRef(false)
-  const leftClickTimerRef = useRef(null)
-  const longPressTimerRef = useRef(null)
   const fitTimerRef = useRef(null)
-  const pointerHandledRef = useRef(false)
   // 缩放/偏移的实时镜像，供滚轮缩放读取最新值（避免在 setState updater 内嵌套调用 setState）
   const zoomRef = useRef(zoom)
   const offsetXRef = useRef(offsetX)
@@ -640,114 +631,8 @@ export default function PixelBeadsPage() {
     }, 'image/png')
   }
 
-  // ===== 支付 & 下载逻辑 =====
-  // 左键单击 → 打开支付弹窗；左右键同时按 → 直接免费下载
-
-  const doFreeDownload = useCallback(() => {
-    handleExport()
-  }, [handleExport])
-
-  const openPaymentModal = () => {
-    setPayStatus('idle')
-    setPayOpen(true)
-  }
-
-  const closePaymentModal = () => {
-    setPayOpen(false)
-    setPayStatus('idle')
-  }
-
-  // 模拟支付流程 —— 接入真实支付时替换此函数体
-  // 注意：下载必须在用户点击手势内触发，否则移动端浏览器会拦截
-  const processPayment = () => {
-    setPayStatus('processing')
-    // 立即触发下载（在用户手势上下文内），同时展示支付成功动画
-    handleExport()
-    setTimeout(() => {
-      setPayStatus('success')
-      setTimeout(() => {
-        closePaymentModal()
-      }, 800)
-    }, 600)
-  }
-
-  // 触摸起始位置，用于判断是否移动（移动则取消长按）
-  const touchStartRef = useRef({ x: 0, y: 0 })
-
-  // 桌面端：左键单击 → 支付；左键按下 250ms 内同时按右键 → 免费下载
-  const handleExportMouseDown = (e) => {
-    if (e.button === 0) {
-      if (leftClickTimerRef.current) clearTimeout(leftClickTimerRef.current)
-      leftClickTimerRef.current = setTimeout(() => {
-        if (!rightPressedRef.current) openPaymentModal()
-        rightPressedRef.current = false
-      }, 250)
-    } else if (e.button === 2) {
-      rightPressedRef.current = true
-      if (leftClickTimerRef.current) {
-        clearTimeout(leftClickTimerRef.current)
-        leftClickTimerRef.current = null
-        rightPressedRef.current = false
-        pointerHandledRef.current = true
-        doFreeDownload()
-      }
-    }
-  }
-
-  const handleExportMouseUp = (e) => {
-    if (e.button === 2) {
-      setTimeout(() => { rightPressedRef.current = false }, 150)
-    }
-  }
-
-  // 移动端：长按 500ms → 免费下载；短按 → onClick 打开支付弹窗
-  const handleExportTouchStart = (e) => {
-    pointerHandledRef.current = false
-    const t = e.touches[0]
-    touchStartRef.current = { x: t.clientX, y: t.clientY }
-    longPressTimerRef.current = setTimeout(() => {
-      longPressTimerRef.current = null
-      pointerHandledRef.current = true
-      doFreeDownload()
-    }, 500)
-  }
-
-  const handleExportTouchMove = (e) => {
-    if (!longPressTimerRef.current) return
-    const t = e.touches[0]
-    const dx = t.clientX - touchStartRef.current.x
-    const dy = t.clientY - touchStartRef.current.y
-    if (Math.hypot(dx, dy) > 10) {
-      clearTimeout(longPressTimerRef.current)
-      longPressTimerRef.current = null
-    }
-  }
-
-  const handleExportTouchEnd = () => {
-    if (longPressTimerRef.current) {
-      clearTimeout(longPressTimerRef.current)
-      longPressTimerRef.current = null
-    }
-  }
-
-  // onClick：短按/左键打开支付弹窗（若已由长按/右键处理则跳过）
-  const handleExportClick = () => {
-    if (pointerHandledRef.current) {
-      pointerHandledRef.current = false
-      return
-    }
-    openPaymentModal()
-  }
-
-  const handleExportContextMenu = (e) => {
-    e.preventDefault()
-  }
-
-  // 组件卸载时清理定时器
-  useEffect(() => () => {
-    if (leftClickTimerRef.current) clearTimeout(leftClickTimerRef.current)
-    if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current)
-  }, [])
+  // A standard click or keyboard activation exports the PNG for free.
+  // There is no payment gateway or simulated payment state on this page.
 
   const totalBeads = useMemo(() => beadCounts.reduce((s, b) => s + b.count, 0), [beadCounts])
   const diffInfo = getDifficultyLabel(longSide, t)
@@ -1027,13 +912,7 @@ export default function PixelBeadsPage() {
 
               {/* 导出按钮 */}
               <button
-                onMouseDown={handleExportMouseDown}
-                onMouseUp={handleExportMouseUp}
-                onTouchStart={handleExportTouchStart}
-                onTouchMove={handleExportTouchMove}
-                onTouchEnd={handleExportTouchEnd}
-                onClick={handleExportClick}
-                onContextMenu={handleExportContextMenu}
+                onClick={handleExport}
                 className="w-full inline-flex items-center justify-center gap-2 rounded-2xl py-4 text-base font-bold bg-green-500 text-white hover:bg-green-600 active:scale-[0.98] transition-all shadow-lg shadow-green-500/20 select-none"
               >
                 {t.exportBtn}
@@ -1189,50 +1068,6 @@ export default function PixelBeadsPage() {
         </div>
       </footer>
 
-      {/* 支付弹窗 */}
-      {payOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={(e) => { if (e.target === e.currentTarget) closePaymentModal() }}>
-          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6">
-            <div className="text-center">
-              <div className="text-4xl mb-3">🔒</div>
-              <h3 className="text-lg font-bold text-gray-800 mb-1">{t.payTitle}</h3>
-              <p className="text-sm text-gray-500 mb-4">{t.payDesc}</p>
-
-              <div className="bg-gradient-to-br from-green-50 to-emerald-50 rounded-xl p-4 mb-4">
-                <div className="text-3xl font-bold text-green-600">{t.payAmount}</div>
-              </div>
-
-              <button
-                onClick={payStatus === 'idle' ? processPayment : undefined}
-                disabled={payStatus !== 'idle'}
-                className={`w-full rounded-xl py-3 text-sm font-bold transition-colors ${
-                  payStatus === 'idle'
-                    ? 'bg-green-500 text-white hover:bg-green-600'
-                    : payStatus === 'processing'
-                    ? 'bg-gray-100 text-gray-500 cursor-wait'
-                    : 'bg-green-100 text-green-700'
-                }`}
-              >
-                {payStatus === 'idle' && t.payBtn}
-                {payStatus === 'processing' && (
-                  <span className="inline-flex items-center justify-center gap-2">
-                    <span className="animate-spin">⏳</span> {t.payProcessing}
-                  </span>
-                )}
-                {payStatus === 'success' && <>✅ {t.paySuccess}</>}
-              </button>
-
-              <button
-                onClick={closePaymentModal}
-                className="mt-3 text-xs text-gray-400 hover:text-gray-600"
-              >
-                {t.payCancel}
-              </button>
-              <p className="mt-3 text-[11px] text-gray-400">{t.payNote}</p>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }
